@@ -1,0 +1,469 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Friends Sportsbook (Play Money)</title>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    body { margin:0; background:#0b1020; color:#eef2ff; }
+    header { display:flex; gap:12px; align-items:center; padding:16px 20px; background:#111836; position:sticky; top:0; z-index:10; }
+    h1 { font-size:20px; margin:0; }
+    .wrap { display:grid; grid-template-columns: 1.4fr 0.6fr; gap:16px; padding:16px 20px; }
+    .card { background:#161d3a; border:1px solid #263067; border-radius:14px; box-shadow:0 6px 20px rgba(0,0,0,.35); }
+    .card h2 { font-size:16px; margin:0; padding:12px 14px; border-bottom:1px solid #263067; }
+    .card .content { padding:12px 14px; }
+    .events { display:grid; gap:10px; }
+    .event { display:grid; gap:10px; padding:12px; border:1px solid #253165; border-radius:12px; background:#0f1633; }
+    .row { display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap; }
+    .teams { font-weight:600; }
+    .book { display:flex; flex-wrap:wrap; gap:8px; }
+    button { cursor:pointer; background:#2b5cff; color:white; border:none; padding:8px 10px; border-radius:10px; font-weight:600; }
+    button.secondary { background:#253165; }
+    input[type=number], select { padding:6px 8px; border-radius:8px; border:1px solid #2b396e; background:#0d1430; color:#fff; }
+    input[type=number]{ width:90px; }
+    .flex { display:flex; gap:8px; align-items:center; }
+    .muted { color:#a8b0d6; font-size:12px; }
+    .badge { background:#263067; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .pick { background:#253165; }
+    .pick.selected { outline:2px solid #7bff9e; }
+    .tabs { display:flex; gap:8px; margin:8px 0; }
+    .tabbtn { background:#253165; }
+    .tabbtn.active { background:#2b5cff; }
+    .bets { display:grid; gap:8px; }
+    .bet { display:grid; gap:4px; padding:8px; border-radius:10px; background:#0f1633; border:1px solid #253165; }
+    .small { font-size:12px; color:#a8b0d6; }
+    .danger { color:#ff7a7a; }
+    .success { color:#7bff9e; }
+    .list { display:grid; gap:10px; }
+    .status { font-size:12px; background:#253165; padding:2px 6px; border-radius:8px; }
+    .live { background:#2563eb; }
+    .final { background:#059669; }
+    @media (max-width: 900px){ .wrap{ grid-template-columns: 1fr; } }
+    @media (max-width: 560px){
+      .row > * { flex: 1 1 100%; }
+      button, select, input { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Friends Sportsbook (Play Money)</h1>
+  <div class="flex">
+    <label for="sport">Sport:</label>
+    <select id="sport">
+      <option value="americanfootball_nfl">NFL</option>
+      <option value="basketball_nba">NBA</option>
+      <option value="baseball_mlb">MLB</option>
+      <option value="icehockey_nhl">NHL</option>
+      <option value="soccer_epl">Soccer (EPL)</option>
+    </select>
+  </div>
+  <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">
+    <span class="badge" id="whoami">—</span>
+    <a href="/admin" id="adminLink" style="display:none; color:#a3c7ff;">Admin</a>
+    <button id="logoutBtn" class="secondary">Log out</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card">
+    <h2>Lines</h2>
+    <div class="content">
+      <div id="events" class="events"></div>
+    </div>
+  </section>
+
+  <aside class="card">
+    <h2>Slip & Bets</h2>
+    <div class="content">
+      <div class="tabs">
+        <button class="tabbtn active" data-tab="slip">Bet Slip</button>
+        <button class="tabbtn" data-tab="open">My Bets</button>
+      </div>
+
+      <div id="tab-slip">
+        <div class="small">Parlay/Same-game/Round-Robin builder. Balances are server-side.</div>
+        <div id="balance" class="success" style="margin:6px 0;"></div>
+
+        <div class="small" style="margin-top:6px;">Parlay summary:</div>
+        <div id="parlaySummary" class="small">No legs yet.</div>
+
+        <div class="flex" style="margin:8px 0;">
+          <label>Stake</label>
+          <input id="stake" type="number" min="1" step="1" value="50" />
+          <button id="placeSingle">Place Single</button>
+          <button id="placeParlay" class="secondary">Place Parlay</button>
+        </div>
+
+        <div class="flex" style="margin:8px 0;">
+          <label>Round Robin</label>
+          <select id="rrSize">
+            <option value="0">Off</option>
+            <option value="2">2-leg</option>
+            <option value="3">3-leg</option>
+            <option value="4">4-leg</option>
+          </select>
+          <button id="placeRR" class="secondary">Place Round Robin</button>
+        </div>
+
+        <div class="small">Parlay legs:</div>
+        <div id="parlay" class="list"></div>
+        <div id="result" class="small"></div>
+      </div>
+
+      <div id="tab-open" style="display:none">
+        <div class="flex" style="justify-content:space-between; margin-bottom:8px;">
+          <div class="small">Open & recent bets</div>
+          <button id="settleBtn">Attempt Auto-Settle</button>
+        </div>
+        <div id="mybets" class="bets"></div>
+      </div>
+    </div>
+  </aside>
+
+  <section class="card leaderboard" style="grid-column:1 / -1;">
+    <h2>Leaderboard</h2>
+    <div class="content"><table id="lb"></table></div>
+  </section>
+</main>
+
+<footer class="small" style="padding:16px 20px;">
+  Data: odds via The Odds API (display only). This site is for entertainment — no cash.
+</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+async function api(path, opts={}){ const r = await fetch(path, {credentials:'same-origin', ...opts}); const d = await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||('HTTP '+r.status)); return d; }
+
+let CURRENT=null, CURRENT_SPORT='americanfootball_nfl';
+const PARLAY = []; // {selection, odds, meta}
+const SCORE_CACHE = new Map(); // eventId -> { completed, home_team, away_team, scores[]/home_score/away_score }
+
+function toDecimal(odds){
+  const o = Number(odds);
+  if (!Number.isFinite(o)) return 0;
+  return o > 0 ? 1 + o/100 : 1 + 100/Math.abs(o);
+}
+function decToAmerican(dec){
+  if (dec <= 1) return 0;
+  return dec >= 2 ? Math.round((dec - 1) * 100) : -Math.round(100 / (dec - 1));
+}
+function singleProfit(stake, odds){
+  const o = Number(odds);
+  if (!Number.isFinite(o)) return 0;
+  return o>0 ? Math.round(stake * (o/100)) : Math.round(stake * (100/Math.abs(o)));
+}
+
+function addLeg(leg){ PARLAY.push(leg); renderParlay(); }
+function removeLeg(i){ PARLAY.splice(i,1); renderParlay(); }
+function renderParlay(){
+  const box = $('#parlay');
+  if (!PARLAY.length) { box.innerHTML = '<div class="small">No legs yet. Use the + buttons on events.</div>'; }
+  else {
+    const html = PARLAY.map((l,i)=>`<div class="bet"><div><b>${l.selection}</b> <span class="small">(${l.odds})</span></div><div class="small">${(l.meta?.away||'?')} @ ${(l.meta?.home||'?')} • ${new Date(l.meta?.when||Date.now()).toLocaleString()}</div><div><button class="secondary" data-remove="${i}">Remove</button></div></div>`).join('');
+    box.innerHTML = html;
+    $$('#parlay [data-remove]').forEach(btn => btn.onclick = () => removeLeg(Number(btn.dataset.remove)));
+  }
+  const stake = Math.max(1, Math.floor(Number($('#stake').value)||0));
+  if (!PARLAY.length) { $('#parlaySummary').textContent = 'No legs yet.'; return; }
+  const dec = PARLAY.reduce((acc,l)=> acc * toDecimal(l.odds), 1);
+  const american = decToAmerican(dec);
+  const profit = Math.round(stake * (dec - 1));
+  const payout = stake + profit;
+  $('#parlaySummary').textContent = `Legs: ${PARLAY.length} • Combined odds: ${american > 0 ? '+'+american : american} • Potential profit: $${profit} • Payout: $${payout}`;
+}
+
+async function refreshMe(){
+  const me = await api('/api/me'); CURRENT = me.user;
+  if(!CURRENT) location.href = '/login.html';
+  $('#whoami').textContent = CURRENT.username + ' • $' + CURRENT.balance;
+  $('#adminLink').style.display = CURRENT.role==='admin' ? 'inline' : 'none';
+  $('#balance').textContent = 'Balance: $' + CURRENT.balance;
+}
+async function refreshLB(){
+  const { rows } = await api('/api/leaderboard');
+  const html = ['<tr><th>#</th><th>Player</th><th>Balance</th><th>Open</th></tr>']
+    .concat(rows.map((r,i)=>`<tr><td>#${i+1}</td><td>${r.username}</td><td>$${r.balance}</td><td>${r.open}</td></tr>`)).join('');
+  $('#lb').innerHTML = html;
+}
+async function refreshMyBets(){
+  const { bets } = await api('/api/my-bets');
+  $('#mybets').innerHTML = bets.map(b=>{
+    if (b.type==='parlay') {
+      const legs = (b.legs||[]).map(l=>`${l.selection} <span class="small">(${l.odds})</span>`).join('<br/>');
+      const rr = b.meta && b.meta.rr ? ` • <span class="small">RR ${b.meta.size}-leg</span>` : '';
+      return `<div class="bet"><div><b>PARLAY${rr}</b> • Stake $${b.stake} • <span class="small">Combined ${b.combinedOdds || '—'}</span></div><div class="small">Status: ${b.status}</div><div>${legs}</div></div>`;
+    } else {
+      return `<div class="bet"><div><b>${b.selection}</b> <span class="small">(${b.odds})</span></div><div class="small">Stake $${b.stake} • Status: ${b.status}</div></div>`;
+    }
+  }).join('') || '<div class="small">No bets yet.</div>';
+}
+
+async function loadScores(){
+  try{
+    const data = await api('/api/scores?sport='+encodeURIComponent(CURRENT_SPORT));
+    for (const s of data) SCORE_CACHE.set(s.id, s);
+    // annotate event cards
+    $$('.event').forEach(card=>{
+      const id = card.getAttribute('data-id');
+      const el = card.querySelector('.status');
+      if (!id || !el) return;
+      const sc = SCORE_CACHE.get(id);
+      if (!sc) { el.textContent = '—'; el.className = 'status'; return; }
+      if (sc.completed) {
+        const h = sc.home_team, a = sc.away_team;
+        const hs = Number(sc.home_score ?? sc.scores?.find(x=>x.name===h)?.score ?? 0);
+        const as = Number(sc.away_score ?? sc.scores?.find(x=>x.name===a)?.score ?? 0);
+        el.textContent = `Final • ${a} ${as} – ${h} ${hs}`;
+        el.className = 'status final';
+      } else {
+        el.textContent = 'In progress';
+        el.className = 'status live';
+      }
+    });
+  }catch(e){ /* ignore */ }
+}
+
+async function loadOdds(sport){
+  CURRENT_SPORT = sport;
+  $('#events').innerHTML = '<div class="muted">Loading odds…</div>';
+  try{
+    const data = await api('/api/odds?sport='+encodeURIComponent(sport));
+    renderEvents(data);
+    await loadScores();
+  }catch(e){ $('#events').innerHTML = '<div class="danger">'+e.message+'</div>'; }
+}
+
+// fix: make pick buttons actually toggle/selectable
+function wirePickButtons(scope){
+  scope.querySelectorAll('.pick').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      scope.querySelectorAll('.pick').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      updateSinglePreview(scope);
+    });
+  });
+}
+function updateSinglePreview(scope){
+  const stakeEl = scope.querySelector('.stake');
+  const preview = scope.querySelector('.singlePreview');
+  const typeSel = scope.querySelector('.typeSel');
+  const stake = Math.max(1, Math.floor(Number(stakeEl?.value||0)));
+  let odds = null;
+  if (typeSel.value==='ml'){
+    const btn = scope.querySelector('.pick.selected');
+    if (!btn) { preview.textContent = ''; return; }
+    odds = Number(btn.dataset.odds);
+  } else {
+    const lineSel = scope.querySelector('.lineSel');
+    if (!lineSel) { preview.textContent = ''; return; }
+    const text = lineSel.value;
+    const m = text.match(/^(.*)\s([+-]?[0-9.]+)\s\(([-+0-9]+)\)$/);
+    if (!m) { preview.textContent = ''; return; }
+    odds = Number(m[3]);
+  }
+  if (!Number.isFinite(odds)) { preview.textContent=''; return; }
+  const profit = singleProfit(stake, odds);
+  const payout = stake + profit;
+  preview.textContent = `Potential profit: $${profit} • Payout: $${payout}`;
+}
+
+function renderEvents(events){
+  const container = $('#events'); container.innerHTML = '';
+  if (!events.length) { container.innerHTML = '<div class="muted">No events right now.</div>'; return; }
+
+  for (const ev of events){
+    const home = ev.home_team, away = ev.away_team, when = new Date(ev.commence_time).toLocaleString();
+    const bookOffers = {};
+    for (const b of (ev.bookmakers||[])){
+      const entry = bookOffers[b.title||b.key] = { ml:null, spreads:null, totals:null };
+      for (const m of (b.markets||[])){
+        if (m.key==='h2h') entry.ml = m.outcomes||[];
+        if (m.key==='spreads') entry.spreads = m.outcomes||[];
+        if (m.key==='totals') entry.totals = m.outcomes||[];
+      }
+    }
+    const books = Object.keys(bookOffers); if (!books.length) continue;
+
+    const div = document.createElement('div'); div.className='event'; div.setAttribute('data-id', ev.id||'');
+    div.innerHTML = `
+      <div class="row">
+        <div class="teams">${away} @ ${home}</div>
+        <div class="muted">${when}</div>
+        <div class="status">—</div>
+      </div>
+      <div class="row">
+        <div class="flex">
+          <label>Book:</label>
+          <select class="bookSel">${books.map(b=>`<option>${b}</option>`).join('')}</select>
+        </div>
+        <div class="flex">
+          <label>Type:</label>
+          <select class="typeSel">
+            <option value="ml">Moneyline</option>
+            <option value="spread">Spread</option>
+            <option value="total">Over/Under</option>
+          </select>
+        </div>
+        <div class="flex optSelWrap"></div>
+        <div class="flex"><label>Stake</label><input class="stake" type="number" min="1" step="1" value="25"/></div>
+        <button class="placeBtn">Place Single</button>
+        <button class="addParlay">+ Parlay Leg</button>
+      </div>
+      <div class="small singlePreview"></div>
+      <div class="muted result"></div>
+    `;
+
+    const bookSel = div.querySelector('.bookSel');
+    const typeSel = div.querySelector('.typeSel');
+    const optWrap = div.querySelector('.optSelWrap');
+    const stakeEl = div.querySelector('.stake');
+    const result = div.querySelector('.result');
+
+    function renderOptions(){
+      const book = bookSel.value, type = typeSel.value, offer = bookOffers[book];
+      let html = '';
+      if (type==='ml' && offer.ml){
+        const a = offer.ml.find(o=>o.name===away);
+        const h = offer.ml.find(o=>o.name===home);
+        html = `
+          <button class="pick" data-sel="${away}" data-odds="${a?.price??''}">${away} ${a?.price??''}</button>
+          <button class="pick" data-sel="${home}" data-odds="${h?.price??''}">${home} ${h?.price??''}</button>
+        `;
+      } else if (type==='spread' && offer.spreads){
+        const lines = offer.spreads.map(o=>`${o.name} ${o.point} (${o.price})`);
+        html = `<select class="lineSel">${lines.map(l=>`<option>${l}</option>`).join('')}</select>`;
+      } else if (type==='total' && offer.totals){
+        const lines = offer.totals.map(o=>`${o.name} ${o.point} (${o.price})`);
+        html = `<select class="lineSel">${lines.map(l=>`<option>${l}</option>`).join('')}</select>`;
+      } else {
+        html = '<span class="muted">No market data</span>';
+      }
+      optWrap.innerHTML = html;
+      wirePickButtons(div);
+      updateSinglePreview(div);
+      const lineSel = div.querySelector('.lineSel');
+      if (lineSel) lineSel.addEventListener('change', ()=> updateSinglePreview(div));
+    }
+
+    bookSel.addEventListener('change', renderOptions);
+    typeSel.addEventListener('change', renderOptions);
+    stakeEl.addEventListener('input', ()=> updateSinglePreview(div));
+    renderOptions();
+
+    async function makeSingle(){
+      try{
+        const stake = Math.max(1, Math.floor(Number(stakeEl.value)||0));
+        let sel=null, odds=null, meta={ eventId: ev.id, sport: CURRENT_SPORT, home, away, when, book: bookSel.value, type: typeSel.value };
+        if (typeSel.value==='ml'){
+          const btn = div.querySelector('.pick.selected');
+          if (!btn) throw new Error('Click a team button first');
+          sel = btn.dataset.sel; odds = Number(btn.dataset.odds);
+        } else {
+          const lineSel = div.querySelector('.lineSel'); if(!lineSel) throw new Error('No lines available');
+          const text = lineSel.value; // "Team +3.5 (-110)" or "Over 45.5 (-105)"
+          const m = text.match(/^(.*)\s([+-]?[0-9.]+)\s\(([-+0-9]+)\)$/);
+          if (!m) throw new Error('Bad line format');
+          sel = m[1] + ' ' + m[2]; odds = Number(m[3]);
+        }
+        const r = await api('/api/bet',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ selection:sel, odds, stake, meta })});
+        $('#balance').textContent = 'Balance: $' + r.balance; $('#whoami').textContent = CURRENT.username + ' • $' + r.balance;
+        result.textContent = 'Bet placed!'; result.className = 'success';
+        refreshLB(); refreshMyBets();
+      }catch(e){ result.textContent = e.message; result.className = 'danger'; }
+    }
+
+    function addLegFromUI(){
+      try{
+        let sel=null, odds=null, meta={ eventId: ev.id, sport: CURRENT_SPORT, home, away, when, book: bookSel.value, type: typeSel.value };
+        if (typeSel.value==='ml'){
+          const btn = div.querySelector('.pick.selected');
+          if (!btn) throw new Error('Click a team button first');
+          sel = btn.dataset.sel; odds = Number(btn.dataset.odds);
+        } else {
+          const lineSel = div.querySelector('.lineSel'); if(!lineSel) throw new Error('No lines available');
+          const text = lineSel.value;
+          const m = text.match(/^(.*)\s([+-]?[0-9.]+)\s\(([-+0-9]+)\)$/);
+          if (!m) throw new Error('Bad line format');
+          sel = m[1] + ' ' + m[2]; odds = Number(m[3]);
+        }
+        addLeg({ selection: sel, odds, meta });
+        result.textContent = 'Added to parlay'; result.className = 'success';
+        renderParlay();
+      }catch(e){ result.textContent = e.message; result.className = 'danger'; }
+    }
+
+    div.querySelector('.placeBtn').addEventListener('click', makeSingle);
+    div.querySelector('.addParlay').addEventListener('click', addLegFromUI);
+    container.appendChild(div);
+  }
+}
+
+$('#sport').addEventListener('change', (e)=> { loadOdds(e.target.value); });
+$('#logoutBtn').addEventListener('click', async ()=>{ await api('/api/logout',{method:'POST'}); location.href='/login.html'; });
+
+$('.tabbtn[data-tab="slip"]').onclick = ()=>{
+  $('.tabbtn[data-tab="slip"]').classList.add('active');
+  $('.tabbtn[data-tab="open"]').classList.remove('active');
+  $('#tab-slip').style.display = 'block';
+  $('#tab-open').style.display = 'none';
+};
+$('.tabbtn[data-tab="open"]').onclick = async ()=>{
+  $('.tabbtn[data-tab="open"]').classList.add('active');
+  $('.tabbtn[data-tab="slip"]').classList.remove('active');
+  $('#tab-open').style.display = 'block';
+  $('#tab-slip').style.display = 'none';
+  await refreshMyBets();
+};
+
+$('#placeSingle').onclick = ()=>{
+  $('#result').textContent = 'Use "Place Single" on a specific event card.'; $('#result').className='small';
+};
+$('#placeParlay').onclick = async ()=>{
+  try{
+    const stake = Math.max(1, Math.floor(Number($('#stake').value)||0));
+    if (PARLAY.length < 2) throw new Error('Need at least 2 legs');
+    const r = await api('/api/bet',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ parlay:true, legs: PARLAY, stake })});
+    $('#balance').textContent = 'Balance: $' + r.balance; $('#whoami').textContent = CURRENT.username + ' • $' + r.balance;
+    PARLAY.length = 0; renderParlay();
+    $('#result').textContent = 'Parlay placed!'; $('#result').className = 'success';
+    await refreshLB(); await refreshMyBets();
+  }catch(e){ $('#result').textContent = e.message; $('#result').className = 'danger'; }
+};
+$('#placeRR').onclick = async ()=>{
+  try{
+    const stake = Math.max(1, Math.floor(Number($('#stake').value)||0));
+    const size = Math.floor(Number($('#rrSize').value||0));
+    if (!size) { $('#result').textContent='Select a RR size (2-leg, 3-leg, …)'; $('#result').className='danger'; return; }
+    if (PARLAY.length < size) throw new Error('Not enough legs for round robin');
+    const r = await api('/api/bet',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ rr: { size, legs: PARLAY }, stake })});
+    $('#balance').textContent = 'Balance: $' + r.balance; $('#whoami').textContent = CURRENT.username + ' • $' + r.balance;
+    $('#result').textContent = `Round robin placed: ${r.placed} tickets`; $('#result').className = 'success';
+    PARLAY.length = 0; renderParlay();
+    await refreshLB(); await refreshMyBets();
+  }catch(e){ $('#result').textContent = e.message; $('#result').className = 'danger'; }
+};
+$('#stake').addEventListener('input', renderParlay);
+
+// Auto refresh odds/scores
+let oddsTimer = null, scoreTimer = null;
+function startAuto(){
+  if (oddsTimer) clearInterval(oddsTimer);
+  if (scoreTimer) clearInterval(scoreTimer);
+  oddsTimer = setInterval(()=> loadOdds($('#sport').value), 60000);
+  scoreTimer = setInterval(loadScores, 30000);
+}
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ loadOdds($('#sport').value); } });
+
+(async function init(){
+  await refreshMe();
+  await refreshLB();
+  await loadOdds($('#sport').value);
+  renderParlay();
+  startAuto();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Admin • Friends Sportsbook</title>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    body { margin:0; background:#0b1020; color:#eef2ff; }
+    header { padding:16px 20px; background:#111836; display:flex; gap:12px; align-items:center; }
+    a { color:#a3c7ff; }
+    .wrap { padding:16px 20px; display:grid; gap:16px; }
+    .card { background:#161d3a; border:1px solid #263067; border-radius:14px; padding:12px; }
+    label { display:block; font-size:12px; color:#a8b0d6; margin-bottom:4px;}
+    input { padding:8px; border-radius:8px; border:1px solid #2b396e; background:#0d1430; color:#fff; }
+    button { cursor:pointer; background:#2b5cff; color:white; border:none; padding:8px 12px; border-radius:10px; font-weight:600; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:8px; border-bottom:1px solid #263067; text-align:left; }
+    .row { display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:8px; align-items:end; }
+    .muted { color:#a8b0d6; font-size:12px; }
+    @media (max-width: 800px){
+      .row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="flex:1;"><b>Admin</b></div>
+    <a href="/">Home</a>
+    <form id="logoutForm" style="margin-left:12px;"><button type="submit" style="background:#253165;">Log out</button></form>
+  </header>
+
+  <main class="wrap">
+    <section class="card">
+      <h3>Create User</h3>
+      <div class="row">
+        <div><label>Username</label><input id="cu_user" /></div>
+        <div><label>Password</label><input id="cu_pass" type="password"/></div>
+        <div><label>Starting Balance</label><input id="cu_bal" type="number" value="1000"/></div>
+        <div><button id="cu_btn">Create</button></div>
+      </div>
+      <div id="cu_msg" class="muted" style="margin-top:8px;"></div>
+    </section>
+
+    <section class="card">
+      <h3>User Ops</h3>
+      <div class="row">
+        <div><label>Username</label><input id="u_user"/></div>
+        <div><label>Balance</label><input id="u_bal" type="number"/></div>
+        <div><button id="u_set">Set Balance</button></div>
+        <div><button id="u_resetpw" class="secondary" style="background:#253165;">Reset Password</button></div>
+      </div>
+      <div class="row">
+        <div><label>New Password</label><input id="u_newpw" type="password"/></div>
+        <div><label>Ban status</label>
+          <select id="u_ban">
+            <option value="false">Unbanned</option>
+            <option value="true">Banned</option>
+          </select>
+        </div>
+        <div><button id="u_applyban">Apply Ban/Unban</button></div>
+      </div>
+      <div id="u_msg" class="muted" style="margin-top:8px;"></div>
+    </section>
+
+    <section class="card">
+      <h3>Users</h3>
+      <div class="muted">Refresh to see latest balances and open bet counts.</div>
+      <table id="tbl"></table>
+    </section>
+  </main>
+
+<script>
+async function api(path, opts={}){ const r = await fetch(path, {credentials:'same-origin', ...opts}); const d = await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||('HTTP '+r.status)); return d; }
+
+async function loadUsers(){
+  const { users } = await api('/api/admin/list-users');
+  const html = ['<tr><th>User</th><th>Role</th><th>Balance</th><th>Banned</th><th>Open</th></tr>']
+    .concat(users.map(u=>`<tr><td>${u.username}</td><td>${u.role}</td><td>$${u.balance}</td><td>${u.banned?'Yes':'No'}</td><td>${u.open}</td></tr>`))
+    .join('');
+  document.getElementById('tbl').innerHTML = html;
+}
+
+document.getElementById('logoutForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  await api('/api/logout', { method:'POST' });
+  location.href = '/login.html';
+});
+
+document.getElementById('cu_btn').onclick = async ()=>{
+  try{
+    const username = document.getElementById('cu_user').value.trim();
+    const password = document.getElementById('cu_pass').value;
+    const balance = Number(document.getElementById('cu_bal').value||0);
+    await api('/api/admin/create-user',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, password, balance })});
+    document.getElementById('cu_msg').textContent = 'Created!';
+    await loadUsers();
+  }catch(e){ document.getElementById('cu_msg').textContent = e.message; }
+};
+
+document.getElementById('u_set').onclick = async ()=>{
+  try{
+    const username = document.getElementById('u_user').value.trim();
+    const balance = Number(document.getElementById('u_bal').value||0);
+    await api('/api/admin/set-balance',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, balance })});
+    document.getElementById('u_msg').textContent = 'Balance updated';
+    await loadUsers();
+  }catch(e){ document.getElementById('u_msg').textContent = e.message; }
+};
+document.getElementById('u_resetpw').onclick = async ()=>{
+  try{
+    const username = document.getElementById('u_user').value.trim();
+    const password = document.getElementById('u_newpw').value;
+    await api('/api/admin/reset-password',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, password })});
+    document.getElementById('u_msg').textContent = 'Password reset';
+  }catch(e){ document.getElementById('u_msg').textContent = e.message; }
+};
+document.getElementById('u_applyban').onclick = async ()=>{
+  try{
+    const username = document.getElementById('u_user').value.trim();
+    const banned = document.getElementById('u_ban').value === 'true';
+    await api('/api/admin/ban',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, banned })});
+    document.getElementById('u_msg').textContent = 'Ban status updated';
+    await loadUsers();
+  }catch(e){ document.getElementById('u_msg').textContent = e.message; }
+};
+
+loadUsers();
+</script>
+</body>
+</html>

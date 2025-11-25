@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login • Friends Sportsbook</title>
+    <style>
+      :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+      body { margin:0; background:#0b1020; color:#eef2ff; display:flex; align-items:center; justify-content:center; height:100vh; }
+      .card { background:#161d3a; border:1px solid #263067; border-radius:16px; padding:24px; width:360px; box-shadow:0 6px 20px rgba(0,0,0,.35); }
+      input, button { width:100%; padding:10px; border-radius:10px; border:1px solid #2b396e; background:#0d1430; color:#fff; }
+      button { background:#2b5cff; border:none; margin-top:10px; font-weight:700; cursor:pointer; }
+      .muted { color:#a8b0d6; font-size:12px; margin-top:8px; }
+      h1 { font-size:18px; margin:0 0 12px; }
+      .error { color:#ff7a7a; font-size:12px; min-height:16px; }
+      .tabs { display:flex; gap:8px; margin-bottom:12px; }
+      .tabs button { flex:1; background:#253165; }
+      .tabs button.active { background:#2b5cff; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Friends Sportsbook</h1>
+      <div class="tabs">
+        <button id="tabLogin" class="active">Log in</button>
+        <button id="tabSignup">Sign up</button>
+        <button id="tabSetup">Admin setup</button>
+      </div>
+      <div id="error" class="error"></div>
+      <div id="loginForm">
+        <input id="luser" placeholder="Username" />
+        <input id="lpass" placeholder="Password" type="password" style="margin-top:8px"/>
+        <button id="loginBtn">Log in</button>
+      </div>
+      <div id="signupForm" style="display:none">
+        <input id="suser" placeholder="Username" />
+        <input id="spass" placeholder="Password (min 6)" type="password" style="margin-top:8px"/>
+        <button id="signupBtn">Create account</button>
+        <div class="muted">First user gets $1000 by default. Admin can change balances later.</div>
+      </div>
+      <div id="setupForm" style="display:none">
+        <input id="apass" placeholder="Set admin password (min 6)" type="password" />
+        <button id="setupBtn">Set Admin Password</button>
+        <div class="muted">Run this once to initialize the built-in admin.</div>
+      </div>
+    </div>
+
+    <script>
+      async function api(path, opts={}) {
+        const r = await fetch(path, { credentials:'same-origin', ...opts });
+        const data = await r.json().catch(()=>({}));
+        if (!r.ok) throw new Error(data.error || ('HTTP '+r.status));
+        return data;
+      }
+      const E = (id)=>document.getElementById(id);
+      function show(tab){
+        E('loginForm').style.display = tab==='login'?'block':'none';
+        E('signupForm').style.display = tab==='signup'?'block':'none';
+        E('setupForm').style.display = tab==='setup'?'block':'none';
+        E('tabLogin').classList.toggle('active', tab==='login');
+        E('tabSignup').classList.toggle('active', tab==='signup');
+        E('tabSetup').classList.toggle('active', tab==='setup');
+        E('error').textContent = '';
+      }
+      E('tabLogin').onclick = ()=> show('login');
+      E('tabSignup').onclick = ()=> show('signup');
+      E('tabSetup').onclick = ()=> show('setup');
+
+      E('loginBtn').onclick = async ()=>{
+        try{
+          await api('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username:E('luser').value.trim(), password:E('lpass').value }) });
+          location.href = '/';
+        }catch(e){ E('error').textContent = e.message; }
+      };
+      E('signupBtn').onclick = async ()=>{
+        try{
+          await api('/api/signup', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username:E('suser').value.trim(), password:E('spass').value }) });
+          location.href = '/';
+        }catch(e){ E('error').textContent = e.message; }
+      };
+      E('setupBtn').onclick = async ()=>{
+        try{
+          await api('/api/setup-admin', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ password:E('apass').value }) });
+          alert('Admin password set! Log in as admin.');
+          show('login');
+        }catch(e){ E('error').textContent = e.message; }
+      };
+    </script>
+  </body>
+</html>
