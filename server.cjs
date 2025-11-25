@@ -456,3 +456,18 @@ app.get('/admin', requireAuth, (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Friends Sportsbook running on http://localhost:${PORT}`));
+
+// --- Bootstrap first-run admin password if provided ---
+(async () => {
+  try {
+    const db = readUsers();
+    const admin = db.users.find(u => u.username === 'admin');
+    if (admin && admin.passwordHash === null && process.env.ADMIN_INIT_PASSWORD) {
+      admin.passwordHash = await bcrypt.hash(process.env.ADMIN_INIT_PASSWORD, 10);
+      writeUsers(db);
+      console.log('Admin password initialized from ADMIN_INIT_PASSWORD');
+    }
+  } catch (e) {
+    console.error('Admin bootstrap failed:', e && e.message);
+  }
+})();
