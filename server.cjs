@@ -1,171 +1,166 @@
 const express = require('express');
-// fetch compatibility: use global fetch (Node 18+) or fallback to node-fetch via dynamic import
-const fetch = globalThis.fetch || ((...args) => import('node-fetch').then(({ default: f }) => f(...args)));
 const dotenv = require('dotenv');
 const path = require('path');
 const cookieSession = require('cookie-session');
 const bcrypt = require('bcryptjs');
-const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { URL } = require('url');
+
+// fetch compatibility (Node 18+ has global fetch)
+const fetch = globalThis.fetch || ((...args) => import('node-fetch').then(({ default: f }) => f(...args)));
 
 dotenv.config();
-
-const __dirnameSafe = __dirname;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ODDS_API_KEY = process.env.ODDS_API_KEY || '';
-
-const DATA_DIR = path.join(__dirnameSafe, 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(USERS_FILE)) {
-  fs.writeFileSync(
-    USERS_FILE,
-    JSON.stringify({ users: [{ username: 'admin', passwordHash: null, role: 'admin', balance: 10000, banned:false, bets: [] }] }, null, 2)
-  );
-}
-
-function readUsers() { return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8')); }
-function writeUsers(db) { fs.writeFileSync(USERS_FILE, JSON.stringify(db, null, 2)); }
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(cookieSession({ name: 'session', keys: [process.env.SESSION_KEY || 'dev_secret_change_me'], maxAge: 24*60*60*1000 }));
-
-// Static
-app.use(express.static(path.join(__dirnameSafe, 'public')));
-
-// Odds API
 const DEFAULT_SPORT = 'americanfootball_nfl';
 const DEFAULT_REGION = 'us';
 const ODDS_FORMAT = 'american';
 const BOOKMAKER_ALLOWLIST = { draftkings:1, fanduel:1, betmgm:1, caesars:1, pointsbetus:1 };
 
-// Helpers
-function requireAuth(req, res, next){ if(!(req.session && req.session.user)) return res.redirect('/login.html'); next(); }
-function requireAdmin(req, res, next){
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieSession({ name:'session', keys:[process.env.SESSION_KEY || 'dev_secret_change_me'], maxAge:24*60*60*1000 }));
+
+// ---------- MongoDB ----------
+const { MongoClient } = require('mongodb');
+const MONGODB_URI = process.env.MONGODB_URI || '';
+if (!MONGODB_URI) {
+  console.error('Missing MONGODB_URI in environment.');
+}
+const client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 20000 });
+let db, Users, Bets;
+
+async function initDB(){
+  await client.connect();
+  // use db name "sportsbook" (logical DB name in the URI is optional)
+  db = client.db('sportsbook');
+  Users = db.collection('users');
+  Bets  = db.collection('bets');
+  // indexes
+  await Users.createIndex({ username: 1 }, { unique: true });
+  await Bets.createIndex({ username: 1, status: 1 });
+  // bootstrap admin
+  let admin = await Users.findOne({ username: 'admin' });
+  if (!admin) {
+    const pw = process.env.ADMIN_INIT_PASSWORD || null;
+    const hash = pw ? await bcrypt.hash(pw, 10) : null;
+    await Users.insertOne({ username:'admin', passwordHash: hash, role:'admin', balance:10000, banned:false, createdAt: new Date() });
+    console.log('Admin user created', hash ? '(password set from ADMIN_INIT_PASSWORD)' : '(no password set)');
+  } else if (!admin.passwordHash && process.env.ADMIN_INIT_PASSWORD) {
+    const hash = await bcrypt.hash(process.env.ADMIN_INIT_PASSWORD, 10);
+    await Users.updateOne({ _id: admin._id }, { $set: { passwordHash: hash } });
+    console.log('Admin password initialized from ADMIN_INIT_PASSWORD');
+  }
+}
+function requireAuth(req,res,next){ if(!(req.session && req.session.user)) return res.redirect('/login.html'); next(); }
+function requireAdmin(req,res,next){
   if(!(req.session && req.session.user)) return res.status(401).json({ error:'Not logged in' });
   if(req.session.user.role !== 'admin') return res.status(403).json({ error:'Admin only' });
   next();
 }
-function toDecimal(american){
-  const o = Number(american);
-  if (!isFinite(o)) return 0;
-  return o > 0 ? 1 + o/100 : 1 + 100/Math.abs(o);
-}
-function decimalToAmerican(dec){
-  if (dec <= 1) return 0;
-  return dec >= 2 ? Math.round((dec - 1) * 100) : -Math.round(100 / (dec - 1));
-}
+function toDecimal(american){ const o = Number(american); if(!isFinite(o)) return 0; return o>0 ? 1 + o/100 : 1 + 100/Math.abs(o); }
+function decimalToAmerican(dec){ if(dec<=1) return 0; return dec>=2 ? Math.round((dec-1)*100) : -Math.round(100/(dec-1)); }
 
-// -------- Auth ----------
-app.get('/api/me', (req, res) => {
-  if(!(req.session && req.session.user)) return res.json({ user: null });
-  const u = req.session.user;
-  res.json({ user: { username: u.username, role: u.role, balance: u.balance, banned: !!u.banned } });
+// ---------- Static ----------
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- Auth ----------
+app.get('/api/me', async (req,res)=>{
+  if(!(req.session && req.session.user)) return res.json({ user:null });
+  const u = await Users.findOne({ username: req.session.user.username }, { projection: { _id:0, username:1, role:1, balance:1, banned:1 }});
+  res.json({ user: u || null });
 });
 
-// Disable public self-signup entirely
-app.post('/api/signup', (req, res) => {
-  return res.status(403).json({ error: 'Signup disabled. Ask admin to create an account.' });
-});
+// disable public signup
+app.post('/api/signup', (req,res)=> res.status(403).json({ error:'Signup disabled. Ask admin to create an account.' }));
 
-// Admin creates users
-app.post('/api/admin/create-user', requireAdmin, async (req, res) => {
+// login
+app.post('/api/login', async (req,res)=>{
   const username = (req.body && req.body.username || '').trim();
-  const password = (req.body && req.body.password) || '';
-  const balance = Math.max(0, Math.floor(Number(req.body && req.body.balance || 0)));
-  if (!username || !password) return res.status(400).json({ error:'username and password required' });
-  if (username.toLowerCase()==='admin') return res.status(400).json({ error:'Reserved username' });
-  const db = readUsers();
-  if (db.users.find(u=>u.username.toLowerCase()===username.toLowerCase())) return res.status(400).json({ error:'Username already exists' });
-  const passwordHash = await bcrypt.hash(password, 10);
-  db.users.push({ username, passwordHash, role:'user', balance, banned:false, bets:[] });
-  writeUsers(db);
-  res.json({ ok:true });
-});
-
-app.post('/api/login', async (req, res) => {
-  const username = (req.body && req.body.username || '').trim();
-  const password = (req.body && req.body.password) || '';
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===username.toLowerCase());
+  const password = (req.body && req.body.password || '');
+  const user = await Users.findOne({ username: new RegExp('^'+username+'$', 'i') });
   if (!user || !user.passwordHash) return res.status(400).json({ error:'Invalid credentials' });
-  if (user.banned) return res.status(403).json({ error: 'Account is banned' });
+  if (user.banned) return res.status(403).json({ error:'Account is banned' });
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) return res.status(400).json({ error:'Invalid credentials' });
-  req.session.user = { username:user.username, role:user.role, balance:user.balance, banned:user.banned };
+  req.session.user = { username: user.username, role: user.role, balance: user.balance, banned: !!user.banned };
   res.json({ ok:true });
 });
-
 app.post('/api/logout', (req,res)=>{ req.session=null; res.json({ ok:true }); });
 
-// -------- Admin ops ----------
-app.get('/api/admin/list-users', requireAdmin, (req,res)=>{
-  const db = readUsers();
-  const rows = db.users.map(u=>({ username:u.username, role:u.role, balance:u.balance, banned:!!u.banned, open:(u.bets||[]).filter(b=>b.status==='open').length }));
-  res.json({ users: rows });
+// ---------- Admin ----------
+app.post('/api/admin/create-user', requireAdmin, async (req,res)=>{
+  const username = (req.body && req.body.username || '').trim();
+  const password = (req.body && req.body.password || '');
+  const balance = Math.max(0, Math.floor(Number(req.body && req.body.balance || 0)));
+  if (!username || !password) return res.status(400).json({ error:'username and password required' });
+  if (username.toLowerCase() === 'admin') return res.status(400).json({ error:'Reserved username' });
+  const passwordHash = await bcrypt.hash(password, 10);
+  try {
+    await Users.insertOne({ username, passwordHash, role:'user', balance, banned:false, createdAt: new Date() });
+    res.json({ ok:true });
+  } catch (e) {
+    if (String(e).includes('duplicate key')) return res.status(400).json({ error:'Username already exists' });
+    res.status(500).json({ error:'DB error' });
+  }
 });
-
-app.post('/api/admin/set-balance', requireAdmin, (req, res) => {
+app.get('/api/admin/list-users', requireAdmin, async (req,res)=>{
+  const arr = await Users.aggregate([
+    { $lookup: { from:'bets', localField:'username', foreignField:'username', as:'_bets' } },
+    { $project: { _id:0, username:1, role:1, balance:1, banned:1,
+      open: { $size: { $filter: { input:'$_bets', as:'b', cond: { $eq: ['$$b.status', 'open'] } } } }
+    } },
+    { $sort: { balance: -1 } }
+  ]).toArray();
+  res.json({ users: arr });
+});
+app.post('/api/admin/set-balance', requireAdmin, async (req,res)=>{
   const username = (req.body && req.body.username || '').trim();
   const balance = Number(req.body && req.body.balance);
   if (!isFinite(balance)) return res.status(400).json({ error:'Invalid balance' });
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===username.toLowerCase());
-  if (!user) return res.status(404).json({ error:'User not found' });
-  user.balance = Math.round(balance);
-  writeUsers(db);
-  if (req.session.user.username.toLowerCase()===user.username.toLowerCase()) req.session.user.balance = user.balance;
-  res.json({ ok:true, username:user.username, balance:user.balance });
+  const r = await Users.findOneAndUpdate({ username: new RegExp('^'+username+'$', 'i') }, { $set: { balance: Math.round(balance) } }, { returnDocument:'after' });
+  if (!r.value) return res.status(404).json({ error:'User not found' });
+  if (req.session.user.username.toLowerCase()===r.value.username.toLowerCase()) req.session.user.balance = r.value.balance;
+  res.json({ ok:true, username: r.value.username, balance: r.value.balance });
 });
-
 app.post('/api/admin/reset-password', requireAdmin, async (req,res)=>{
   const username = (req.body && req.body.username || '').trim();
-  const password = (req.body && req.body.password) || '';
+  const password = (req.body && req.body.password || '');
   if (!username || !password) return res.status(400).json({ error:'username and password required' });
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===username.toLowerCase());
-  if (!user) return res.status(404).json({ error:'User not found' });
-  user.passwordHash = await bcrypt.hash(password, 10);
-  writeUsers(db);
+  const hash = await bcrypt.hash(password, 10);
+  const r = await Users.updateOne({ username: new RegExp('^'+username+'$', 'i') }, { $set: { passwordHash: hash } });
+  if (!r.matchedCount) return res.status(404).json({ error:'User not found' });
   res.json({ ok:true });
 });
-
-app.post('/api/admin/ban', requireAdmin, (req,res)=>{
+app.post('/api/admin/ban', requireAdmin, async (req,res)=>{
   const username = (req.body && req.body.username || '').trim();
   const banned = !!(req.body && req.body.banned);
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===username.toLowerCase());
-  if (!user) return res.status(404).json({ error:'User not found' });
-  user.banned = banned;
-  writeUsers(db);
-  res.json({ ok:true, username:user.username, banned:user.banned });
+  const r = await Users.updateOne({ username: new RegExp('^'+username+'$', 'i') }, { $set: { banned } });
+  if (!r.matchedCount) return res.status(404).json({ error:'User not found' });
+  res.json({ ok:true, username, banned });
 });
 
-// -------- Bets / Odds ----------
-app.get('/api/leaderboard', (req, res) => {
-  const db = readUsers();
-  const rows = db.users.map(u => ({ username:u.username, balance:u.balance, open:(u.bets||[]).filter(b=>b.status==='open').length }))
-                       .sort((a,b)=> b.balance - a.balance);
+// ---------- Bets / Odds ----------
+app.get('/api/leaderboard', async (req,res)=>{
+  const rows = await Users.aggregate([
+    { $lookup: { from:'bets', localField:'username', foreignField:'username', as:'_bets' } },
+    { $project: { _id:0, username:1, balance:1,
+      open: { $size: { $filter: { input:'$_bets', as:'b', cond: { $eq: ['$$b.status', 'open'] } } } }
+    } },
+    { $sort: { balance: -1 } }
+  ]).toArray();
   res.json({ rows });
 });
-
-app.get('/api/my-bets', requireAuth, (req,res) => {
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===req.session.user.username.toLowerCase());
-  res.json({ bets: (user && user.bets ? user.bets.slice().reverse() : []) });
+app.get('/api/my-bets', requireAuth, async (req,res)=>{
+  const bets = await Bets.find({ username: req.session.user.username }).sort({ createdAt:-1 }).limit(200).toArray();
+  res.json({ bets });
 });
 
-// Place bet (single, parlay, or round-robin)
-app.post('/api/bet', (req, res) => {
-  if(!(req.session && req.session.user)) return res.status(401).json({ error:'Not logged in' });
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===req.session.user.username.toLowerCase());
-  if (!user) return res.status(401).json({ error:'User missing' });
-  if (user.banned) return res.status(403).json({ error:'Account is banned' });
+app.post('/api/bet', requireAuth, async (req,res)=>{
+  const u = await Users.findOne({ username: req.session.user.username });
+  if (!u) return res.status(401).json({ error:'User missing' });
+  if (u.banned) return res.status(403).json({ error:'Account is banned' });
 
   const parlay = !!(req.body && req.body.parlay);
   const rr = req.body && req.body.rr; // { size, legs }
@@ -177,138 +172,96 @@ app.post('/api/bet', (req, res) => {
 
   if (!isFinite(stake)) return res.status(400).json({ error:'Bad stake' });
 
-  // ROUND ROBIN: creates many parlays (choose rr.size out of legs)
+  // Round robin => multiple parlays
   if (rr && Array.isArray(rr.legs) && Number(rr.size)>=2) {
-    const L = rr.legs;
-    const k = Math.floor(Number(rr.size));
+    const L = rr.legs, k = Math.floor(Number(rr.size));
     if (L.length < k) return res.status(400).json({ error:'Not enough legs for round robin' });
 
-    // combinations helper
-    function combos(arr, k, start=0, cur=[], out=[]){
-      if (cur.length===k) { out.push(cur.slice()); return out; }
-      for (let i=start;i<arr.length;i++) combos(arr, k, i+1, cur.concat(arr[i]), out);
-      return out;
-    }
-    const sets = combos(L, k);
+    function combos(arr,k,start=0,cur=[],out=[]){ if(cur.length===k){ out.push(cur.slice()); return out; } for(let i=start;i<arr.length;i++) combos(arr,k,i+1,cur.concat(arr[i]),out); return out; }
+    const sets = combos(L,k);
     const totalStake = sets.length * stake;
-    if (user.balance < totalStake) return res.status(400).json({ error:`Insufficient balance (need $${totalStake})` });
+    if (u.balance < totalStake) return res.status(400).json({ error:`Insufficient balance (need $${totalStake})` });
 
-    user.bets = user.bets || [];
-    for (const legsSet of sets) {
-      let dec = 1;
-      for (const lg of legsSet) dec *= toDecimal(Number(lg.odds));
+    await Users.updateOne({ _id:u._id }, { $inc: { balance: -totalStake } });
+    const docs = sets.map(legsSet=>{
+      let dec=1; for(const lg of legsSet) dec*=toDecimal(Number(lg.odds));
       const combined = decimalToAmerican(dec);
-      user.balance -= stake;
-      user.bets.push({ id: uuidv4(), type:'parlay', combinedOdds: combined, stake, status:'open', legs: legsSet, meta:{ createdAt: Date.now(), rr:true, size:k } });
-    }
-    writeUsers(db);
-    req.session.user.balance = user.balance;
-    return res.json({ ok:true, balance:user.balance, placed: sets.length });
+      return { id: uuidv4(), username:u.username, type:'parlay', combinedOdds: combined, stake, status:'open', legs: legsSet, createdAt: new Date(), meta:{ rr:true, size:k } };
+    });
+    await Bets.insertMany(docs);
+    const nu = await Users.findOne({ _id:u._id });
+    req.session.user.balance = nu.balance;
+    return res.json({ ok:true, balance: nu.balance, placed: sets.length });
   }
 
-  // Regular single or parlay
+  // Parlay
   if (parlay) {
     if (!Array.isArray(legs) || legs.length < 2) return res.status(400).json({ error:'Parlay needs 2+ legs' });
-    if (user.balance < stake) return res.status(400).json({ error:'Insufficient balance' });
-    let dec = 1;
-    for (let i=0;i<legs.length;i++){
-      const lg = legs[i];
-      if (!lg || !lg.selection || !isFinite(Number(lg.odds))) return res.status(400).json({ error:'Bad leg' });
-      dec *= toDecimal(Number(lg.odds));
-    }
+    if (u.balance < stake) return res.status(400).json({ error:'Insufficient balance' });
+    let dec = 1; for(const lg of legs){ if(!lg || !lg.selection || !isFinite(Number(lg.odds))) return res.status(400).json({ error:'Bad leg' }); dec*=toDecimal(Number(lg.odds)); }
     const combined = decimalToAmerican(dec);
-    user.balance -= stake;
-    const bet = { id: uuidv4(), type:'parlay', combinedOdds: combined, stake, status:'open', legs, meta:{ createdAt: Date.now() } };
-    user.bets = user.bets || [];
-    user.bets.push(bet);
-    writeUsers(db);
-    req.session.user.balance = user.balance;
-    return res.json({ ok:true, balance:user.balance, bet });
-  } else {
-    if (!selection || !isFinite(odds)) return res.status(400).json({ error:'Invalid bet' });
-    if (user.balance < stake) return res.status(400).json({ error:'Insufficient balance' });
-    user.balance -= stake;
-    const bet = { id: uuidv4(), type:'single', selection, odds, stake, status:'open', meta: meta };
-    user.bets = user.bets || [];
-    user.bets.push(bet);
-    writeUsers(db);
-    req.session.user.balance = user.balance;
-    return res.json({ ok:true, balance:user.balance, bet });
+    await Users.updateOne({ _id:u._id }, { $inc: { balance: -stake } });
+    await Bets.insertOne({ id: uuidv4(), username:u.username, type:'parlay', combinedOdds: combined, stake, status:'open', legs, createdAt: new Date() });
+    const nu = await Users.findOne({ _id:u._id });
+    req.session.user.balance = nu.balance;
+    return res.json({ ok:true, balance: nu.balance });
   }
+
+  // Single
+  if (!selection || !isFinite(odds)) return res.status(400).json({ error:'Invalid bet' });
+  if (u.balance < stake) return res.status(400).json({ error:'Insufficient balance' });
+  await Users.updateOne({ _id:u._id }, { $inc: { balance: -stake } });
+  await Bets.insertOne({ id: uuidv4(), username:u.username, type:'single', selection, odds, stake, status:'open', createdAt: new Date(), meta });
+  const nu = await Users.findOne({ _id:u._id });
+  req.session.user.balance = nu.balance;
+  res.json({ ok:true, balance: nu.balance });
 });
 
-// -------- Auto-settle with push handling ----------
-app.post('/api/settle-open', requireAuth, async (req, res) => {
+// ---------- Auto-settle (with push handling) ----------
+app.post('/api/settle-open', requireAuth, async (req,res)=>{
   if (!ODDS_API_KEY) return res.status(500).json({ error:'Missing ODDS_API_KEY in .env' });
-  const db = readUsers();
-  const user = db.users.find(u=>u.username.toLowerCase()===req.session.user.username.toLowerCase());
-  if (!user) return res.status(401).json({ error:'User missing' });
+  const user = req.session.user.username;
+  const openBets = await Bets.find({ username:user, status:'open' }).toArray();
 
-  let settled = 0, wins = 0, losses = 0, pushes = 0;
-  const openBets = (user.bets||[]).filter(b=>b.status==='open');
-
-  // collect ids by sport
   const bySport = {};
-  function addMap(sport, id){
-    if (!sport || !id) return;
-    if (!bySport[sport]) bySport[sport] = {};
-    bySport[sport][id] = 1;
-  }
-  for (let i=0;i<openBets.length;i++){
-    const b = openBets[i];
+  function addMap(sport,id){ if(!sport || !id) return; if(!bySport[sport]) bySport[sport] = {}; bySport[sport][id]=1; }
+  for(const b of openBets){
     if (b.type==='single') addMap((b.meta && b.meta.sport) || DEFAULT_SPORT, b.meta && b.meta.eventId);
-    if (b.type==='parlay' && Array.isArray(b.legs)) {
-      for (let j=0;j<b.legs.length;j++){
-        const lg = b.legs[j];
-        addMap((lg.meta && lg.meta.sport) || DEFAULT_SPORT, lg.meta && lg.meta.eventId);
-      }
-    }
+    if (b.type==='parlay' && Array.isArray(b.legs)) for(const lg of b.legs) addMap((lg.meta && lg.meta.sport) || DEFAULT_SPORT, lg.meta && lg.meta.eventId);
   }
 
   const scoreMap = {};
-  const sports = Object.keys(bySport);
-  for (let i=0;i<sports.length;i++){
-    const sport = sports[i];
-    try {
+  for(const sport of Object.keys(bySport)){
+    try{
       const url = new URL(`https://api.the-odds-api.com/v4/sports/${sport}/scores`);
-      url.searchParams.set('daysFrom', '3');
-      url.searchParams.set('apiKey', ODDS_API_KEY);
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const arr = await r.json();
-      for (let k=0;k<arr.length;k++) scoreMap[arr[k].id] = arr[k];
-    } catch {}
+      url.searchParams.set('daysFrom', '3'); url.searchParams.set('apiKey', ODDS_API_KEY);
+      const r = await fetch(url); if(!r.ok) continue;
+      const arr = await r.json(); for(const s of arr) scoreMap[s.id] = s;
+    }catch{}
   }
-
   function getScores(scoreObj){
     const h = scoreObj.home_team, a = scoreObj.away_team;
-    let hs = 0, as = 0;
+    let hs=0, as=0;
     if (Array.isArray(scoreObj.scores) && scoreObj.scores.length>=2){
-      // try to map by name
       const sh = scoreObj.scores.find(s=>String(s.name).toLowerCase()===String(h).toLowerCase());
       const sa = scoreObj.scores.find(s=>String(s.name).toLowerCase()===String(a).toLowerCase());
-      if (sh && sa) { hs = Number(sh.score||0); as = Number(sa.score||0); }
-      else { hs = Number(scoreObj.scores[0].score||0); as = Number(scoreObj.scores[1].score||0); }
-    } else {
-      hs = Number(scoreObj.home_score || 0);
-      as = Number(scoreObj.away_score || 0);
-    }
-    return { h, a, hs, as };
+      if (sh && sa) { hs=Number(sh.score||0); as=Number(sa.score||0); }
+      else { hs=Number(scoreObj.scores[0].score||0); as=Number(scoreObj.scores[1].score||0); }
+    } else { hs=Number(scoreObj.home_score||0); as=Number(scoreObj.away_score||0); }
+    return { h,a,hs,as };
   }
-
-  function outcomeForSingle(b){ // returns 'win'|'loss'|'push'|null (null=not final)
+  function outcomeForSingle(b){
     const scoreObj = scoreMap[b.meta && b.meta.eventId];
     if (!(scoreObj && scoreObj.completed)) return null;
-    const { h, a, hs, as } = getScores(scoreObj);
+    const { h,a,hs,as } = getScores(scoreObj);
     const type = (b.meta && b.meta.type) || 'ml';
-
     if (type==='ml'){
-      if (hs===as) return 'push'; // tie
+      if (hs===as) return 'push';
       const name = (b.selection||'').toLowerCase();
       const homePick = h.toLowerCase().includes(name);
       const awayPick = a.toLowerCase().includes(name);
-      if (homePick) return hs>as ? 'win' : 'loss';
-      if (awayPick) return as>hs ? 'win' : 'loss';
+      if (homePick) return hs>as ? 'win':'loss';
+      if (awayPick) return as>hs ? 'win':'loss';
       return 'loss';
     }
     if (type==='spread'){
@@ -328,80 +281,62 @@ app.post('/api/settle-open', requireAuth, async (req, res) => {
       const line = Number(m[2]);
       const sum = hs + as;
       if (Math.abs(sum - line) < 1e-9) return 'push';
-      return /over/i.test(m[1]) ? (sum>line ? 'win' : 'loss') : (sum<line ? 'win' : 'loss');
+      return /over/i.test(m[1]) ? (sum>line ? 'win':'loss') : (sum<line ? 'win':'loss');
     }
     return 'loss';
   }
 
-  for (let i=0;i<openBets.length;i++){
-    const b = openBets[i];
-
-    if (b.type === 'single') {
-      const res = outcomeForSingle(b);
-      if (res===null) continue;
-      if (res==='push') {
-        b.status = 'push';
-        user.balance += b.stake; // refund
+  let settled=0,wins=0,losses=0,pushes=0;
+  for(const b of openBets){
+    if (b.type==='single'){
+      const resu = outcomeForSingle(b);
+      if (resu===null) continue;
+      if (resu==='push'){
+        await Bets.updateOne({ _id:b._id }, { $set: { status:'push' } });
+        await Users.updateOne({ username:user }, { $inc: { balance: b.stake } }); // refund
         pushes++; settled++;
+      } else if (resu==='win'){
+        const profit = b.odds>0 ? Math.round(b.stake*(b.odds/100)) : Math.round(b.stake*(100/Math.abs(b.odds)));
+        await Bets.updateOne({ _id:b._id }, { $set: { status:'won' } });
+        await Users.updateOne({ username:user }, { $inc: { balance: b.stake + profit } });
+        wins++; settled++;
       } else {
-        b.status = (res==='win') ? 'won' : 'lost';
-        if (res==='win') {
-          const payout = b.odds>0 ? Math.round(b.stake * (b.odds/100)) : Math.round(b.stake * (100/Math.abs(b.odds)));
-          user.balance += b.stake + payout;
-          wins++; settled++;
-        } else {
-          losses++; settled++;
-        }
+        await Bets.updateOne({ _id:b._id }, { $set: { status:'lost' } });
+        losses++; settled++;
       }
-    }
-
-    if (b.type === 'parlay') {
-      let allFinal = true, hasWinEligible = false;
-      let dec = 1; // combined decimal across non-push legs
-      let anyLoss = false;
-      let allPush = true;
-
-      for (let j=0;j<(b.legs||[]).length;j++){
-        const lg = b.legs[j];
+    } else if (b.type==='parlay'){
+      let allFinal=true, anyLoss=false, allPush=true, dec=1;
+      for(const lg of (b.legs||[])){
         const fake = { selection: lg.selection, odds: Number(lg.odds), stake: b.stake, meta: lg.meta };
-        const res = outcomeForSingle(fake);
-        if (res===null) { allFinal = false; break; }
-        if (res==='push') {
-          // ignore leg (multiply by 1)
-        } else {
-          allPush = false;
-          hasWinEligible = true;
-          if (res==='loss') anyLoss = true;
-          if (res==='win') dec *= toDecimal(Number(lg.odds));
-        }
+        const r = outcomeForSingle(fake);
+        if (r===null) { allFinal=false; break; }
+        if (r==='push'){ /* ignore (mult by 1) */ }
+        else { allPush=false; if (r==='loss') anyLoss=true; if (r==='win') dec*=toDecimal(Number(lg.odds)); }
       }
-
       if (!allFinal) continue;
-
-      if (allPush) {
-        b.status = 'push';
-        user.balance += b.stake; // refund entire parlay
+      if (allPush){
+        await Bets.updateOne({ _id:b._id }, { $set: { status:'push' } });
+        await Users.updateOne({ username:user }, { $inc: { balance: b.stake } });
         pushes++; settled++;
-      } else if (anyLoss) {
-        b.status = 'lost';
+      } else if (anyLoss){
+        await Bets.updateOne({ _id:b._id }, { $set: { status:'lost' } });
         losses++; settled++;
       } else {
-        b.status = 'won';
         const profit = Math.round(b.stake * (dec - 1));
-        user.balance += b.stake + profit;
+        await Bets.updateOne({ _id:b._id }, { $set: { status:'won' } });
+        await Users.updateOne({ username:user }, { $inc: { balance: b.stake + profit } });
         wins++; settled++;
       }
     }
   }
-
-  writeUsers(db);
-  req.session.user.balance = user.balance;
-  res.json({ ok:true, settled, wins, losses, pushes, balance:user.balance });
+  const nu = await Users.findOne({ username:user });
+  req.session.user.balance = nu ? nu.balance : req.session.user.balance;
+  res.json({ ok:true, settled, wins, losses, pushes, balance: req.session.user.balance });
 });
 
-// -------- Odds & scores passthrough ----------
-app.get('/api/odds', async (req, res) => {
-  try {
+// ---------- Odds & Scores passthrough ----------
+app.get('/api/odds', async (req,res)=>{
+  try{
     if (!ODDS_API_KEY) return res.status(500).json({ error:'Missing ODDS_API_KEY in .env' });
     const sport = (req.query && req.query.sport) || DEFAULT_SPORT;
     const url = new URL(`https://api.the-odds-api.com/v4/sports/${sport}/odds`);
@@ -412,20 +347,12 @@ app.get('/api/odds', async (req, res) => {
     const r = await fetch(url);
     if (!r.ok) return res.status(r.status).json({ error:'Upstream error', details: await r.text() });
     const data = await r.json();
-    for (let i=0;i<data.length;i++){
-      const ev = data[i];
-      if (Array.isArray(ev.bookmakers)) {
-        ev.bookmakers = ev.bookmakers.filter(b=> b && BOOKMAKER_ALLOWLIST[(b.key||'')] );
-      }
-    }
+    for (const ev of data) if (Array.isArray(ev.bookmakers)) ev.bookmakers = ev.bookmakers.filter(b => b && BOOKMAKER_ALLOWLIST[(b.key||'')]);
     res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err && err.message ? err.message : 'Unknown error' });
-  }
+  } catch (err){ res.status(500).json({ error: err?.message || 'Unknown error' }); }
 });
-
-app.get('/api/scores', async (req, res) => {
-  try {
+app.get('/api/scores', async (req,res)=>{
+  try{
     if (!ODDS_API_KEY) return res.status(500).json({ error:'Missing ODDS_API_KEY in .env' });
     const sport = (req.query && req.query.sport) || DEFAULT_SPORT;
     const daysFrom = (req.query && req.query.daysFrom) || 3;
@@ -436,38 +363,22 @@ app.get('/api/scores', async (req, res) => {
     if (!r.ok) return res.status(r.status).json({ error:'Upstream error', details: await r.text() });
     const data = await r.json();
     res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err && err.message ? err.message : 'Unknown error' });
-  }
+  } catch (err){ res.status(500).json({ error: err?.message || 'Unknown error' }); }
 });
 
-// Gate /
-app.get('/', (req, res, next) => {
-  if(!(req.session && req.session.user)) return res.redirect('/login.html');
-  next();
-}, (req, res) => {
-  res.sendFile(path.join(__dirnameSafe, 'public', 'index.html'));
+// ---------- Page gates ----------
+app.get('/', (req,res,next)=>{ if(!(req.session && req.session.user)) return res.redirect('/login.html'); next(); }, (req,res)=>{
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-
-// Admin page
-app.get('/admin', requireAuth, (req, res) => {
+app.get('/admin', requireAuth, (req,res)=>{
   if (req.session.user.role !== 'admin') return res.status(403).send('Admin only');
-  res.sendFile(path.join(__dirnameSafe, 'public', 'admin.html'));
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-app.listen(PORT, () => console.log(`Friends Sportsbook running on http://localhost:${PORT}`));
-
-// --- Bootstrap first-run admin password if provided ---
-(async () => {
-  try {
-    const db = readUsers();
-    const admin = db.users.find(u => u.username === 'admin');
-    if (admin && admin.passwordHash === null && process.env.ADMIN_INIT_PASSWORD) {
-      admin.passwordHash = await bcrypt.hash(process.env.ADMIN_INIT_PASSWORD, 10);
-      writeUsers(db);
-      console.log('Admin password initialized from ADMIN_INIT_PASSWORD');
-    }
-  } catch (e) {
-    console.error('Admin bootstrap failed:', e && e.message);
-  }
-})();
+// ---------- Start ----------
+initDB().then(()=>{
+  app.listen(PORT, ()=> console.log(`Friends Sportsbook running on http://localhost:${PORT}`));
+}).catch(err=>{
+  console.error('Failed to init DB:', err?.message || err);
+  process.exit(1);
+});
