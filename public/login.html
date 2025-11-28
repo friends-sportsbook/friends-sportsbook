@@ -15,7 +15,7 @@
     </div>
 
     <h1>Login</h1>
-    <form id="loginForm" class="card">
+    <form id="loginForm" class="card" method="post" action="/login" novalidate>
       <label>Email</label>
       <input name="email" type="email" required />
       <label>Password</label>
@@ -25,7 +25,7 @@
     </form>
 
     <h1 style="margin-top:24px">Register</h1>
-    <form id="registerForm" class="card">
+    <form id="registerForm" class="card" method="post" action="/register" novalidate>
       <label>Email</label>
       <input name="email" type="email" required />
       <label>Password</label>
