@@ -48,6 +48,7 @@
 </head>
 <body>
 <header>
+
   <h1>Friends Sportsbook (Play Money)</h1>
   <div class="flex">
     <label for="sport">Sport:</label>
@@ -465,5 +466,78 @@ document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ loadOd
   startAuto();
 })();
 </script>
+
+</section>
+
+<script>
+async function postJSON(url, body){
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(body)
+  });
+  return r.json();
+}
+
+    panel.style.pointerEvents = 'auto';
+  }
+
+  function log(msg){ 
+    if (out) out.textContent = (typeof msg === 'string') ? msg : JSON.stringify(msg, null, 2);
+  }
+
+  async function postJSON(url, body){
+    try{
+      const r = await fetch(url, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(body)
+      });
+      const data = await r.json();
+      return data;
+    } catch (e) {
+      return { ok:false, error: String(e) };
+    }
+  }
+
+  // Attach after DOM is ready
+  window.addEventListener('DOMContentLoaded', function(){
+    const btnRoulette = document.getElementById("btn-roulette");
+    const btnBlackjack = document.getElementById("btn-blackjack");
+    const btnBaccarat = document.getElementById("btn-baccarat");
+    const btnVP = document.getElementById("btn-vp");
+
+    if (!btnRoulette || !btnBlackjack || !btnBaccarat || !btnVP) {
+      return;
+    }
+
+    btnRoulette.addEventListener('click', async ()=>{
+      log("Playing roulette...");
+      log(data);
+    });
+
+    btnBlackjack.addEventListener('click', async ()=>{
+      log("Playing blackjack...");
+      const data = await postJSON("/api/casino/blackjack/play", { bet:25, decisions:["h","s"] });
+      log(data);
+    });
+
+    btnBaccarat.addEventListener('click', async ()=>{
+      log("Playing baccarat...");
+      const data = await postJSON("/api/casino/baccarat/play", { betType:"banker", amount:50 });
+      log(data);
+    });
+
+    btnVP.addEventListener('click', async ()=>{
+      log("Playing video poker...");
+      const data = await postJSON("/api/casino/video-poker/play", { bet:5, holds:[1,3] });
+      log(data);
+    });
+  });
+})();
+</script>
+
+
+
 </body>
 </html>
